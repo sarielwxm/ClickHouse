@@ -110,6 +110,11 @@ struct ReplicatedMergeTreeLogEntryData
     /// REPLACE PARTITION FROM command
     struct ReplaceRangeEntry
     {
+        /// monitor
+        String data_path;
+        String metadata_path;
+        String disk_name;
+
         String drop_range_part_name;
 
         String from_database;

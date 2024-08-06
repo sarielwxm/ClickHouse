@@ -387,6 +387,10 @@ void ReplicatedMergeTreeLogEntryData::ReplaceRangeEntry::writeText(WriteBuffer &
     out << "from_database: " << escape << from_database << "\n";
     out << "from_table: " << escape << from_table << "\n";
 
+    out << "data_path: " << data_path << "\n";
+    out << "metadata_path: " << metadata_path << "\n";
+    out << "disk_name: " << disk_name << "\n";
+
     out << "source_parts: ";
     writeQuoted(src_part_names, out);
     out << "\n";
@@ -407,6 +411,10 @@ void ReplicatedMergeTreeLogEntryData::ReplaceRangeEntry::readText(ReadBuffer & i
     in >> "drop_range_name: " >> drop_range_part_name >> "\n";
     in >> "from_database: " >> escape >> from_database >> "\n";
     in >> "from_table: " >> escape >> from_table >> "\n";
+
+    in >> "data_path: " >> data_path >> "\n";
+    in >> "metadata_path: " >> metadata_path >> "\n";
+    in >> "disk_name: " >> disk_name >> "\n";
 
     in >> "source_parts: ";
     readQuoted(src_part_names, in);

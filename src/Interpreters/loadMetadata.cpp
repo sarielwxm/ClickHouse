@@ -194,6 +194,8 @@ LoadTaskPtrs loadMetadata(ContextMutablePtr context, const String & default_data
 
         const auto current_file = it->path().filename().string();
 
+        std::cout << current_file << std::endl;
+
         /// TODO: DETACH DATABASE PERMANENTLY ?
         if (fs::path(current_file).extension() == ".sql")
         {

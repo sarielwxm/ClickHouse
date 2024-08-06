@@ -17,6 +17,8 @@ CommonPathPrefixKeyGenerator::CommonPathPrefixKeyGenerator(
 
 ObjectStorageKey CommonPathPrefixKeyGenerator::generate(const String & path, bool is_directory) const
 {
+    ///
+    String prefix = "tmp_replace_from_";
     const auto & [object_key_prefix, suffix_parts] = getLongestObjectKeyPrefix(path);
 
     auto key = std::filesystem::path(object_key_prefix.empty() ? storage_key_prefix : object_key_prefix);
@@ -35,8 +37,14 @@ ObjectStorageKey CommonPathPrefixKeyGenerator::generate(const String & path, boo
         for (size_t i = 0; i + 1 < suffix_parts.size(); ++i)
             key /= suffix_parts[i];
 
-        constexpr size_t part_size = 16;
-        key /= getRandomASCIIString(part_size);
+        //        constexpr size_t part_size = 16;
+        //        key /= getRandomASCIIString(part_size);
+        if (suffix_parts.back().starts_with("detached"))
+        {
+            key /= suffix_parts.back();
+        }
+        else
+            key /= suffix_parts.back().substr(prefix.length());
     }
 
     return ObjectStorageKey::createAsRelative(key);

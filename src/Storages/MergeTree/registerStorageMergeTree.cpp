@@ -5,6 +5,7 @@
 #include <Storages/StorageFactory.h>
 #include <Storages/StorageMergeTree.h>
 #include <Storages/StorageReplicatedMergeTree.h>
+#include <Storages/StorageTSearchMonitorMergeTree.h>
 
 #include <Common/Macros.h>
 #include <Common/OptimizedRegularExpression.h>
@@ -163,6 +164,11 @@ static bool isReplicated(const String & engine_name)
     return engine_name.starts_with("Replicated") && engine_name.ends_with("MergeTree");
 }
 
+static bool isTSearchMonitor(const String & engine_name)
+{
+    return engine_name.starts_with("TSearchMonitor") && engine_name.ends_with("MergeTree");
+}
+
 /// Returns the part of the name of a table engine between "Replicated" (if any) and "MergeTree".
 static std::string_view getNamePart(const String & engine_name)
 {
@@ -172,6 +178,9 @@ static std::string_view getNamePart(const String & engine_name)
 
     if (name_part.ends_with("MergeTree"))
         name_part.remove_suffix(strlen("MergeTree"));
+
+    if (name_part.ends_with("TSearchMonitor"))
+        name_part.remove_suffix(strlen("TSearchMonitor"));
 
     return name_part;
 }
@@ -396,6 +405,7 @@ static StoragePtr create(const StorageFactory::Arguments & args)
     const Settings & local_settings = args.getLocalContext()->getSettingsRef();
 
     bool replicated = isReplicated(args.engine_name);
+    bool monitor = isTSearchMonitor(args.engine_name);
     std::string_view name_part = getNamePart(args.engine_name);
 
     MergeTreeData::MergingParams merging_params;
@@ -449,6 +459,26 @@ static StoragePtr create(const StorageFactory::Arguments & args)
         {
             add_mandatory_param("path in ZooKeeper");
             add_mandatory_param("replica name");
+        }
+    }
+
+    if (monitor)
+    {
+        if (is_extended_storage_def)
+        {
+            add_optional_param("kafka_broker_list");
+            add_optional_param("kafka_topic_list");
+            add_optional_param("kafka_topic_partition");
+            add_optional_param("kafka_group_name");
+            add_optional_param("kafka_format");
+        }
+        else
+        {
+            add_mandatory_param("kafka_broker_list");
+            add_mandatory_param("kafka_topic_list");
+            add_mandatory_param("kafka_topic_partition");
+            add_mandatory_param("kafka_group_name");
+            add_mandatory_param("kafka_format");
         }
     }
 
@@ -537,6 +567,11 @@ static StoragePtr create(const StorageFactory::Arguments & args)
 
         arg_cnt = engine_args.size(); /// Update `arg_cnt` here because extractZooKeeperPathAndReplicaNameFromEngineArgs() could add arguments.
         arg_num = 2;                  /// zookeeper_path and replica_name together are always two arguments.
+    }
+
+    if (monitor)
+    {
+        arg_num = 5;                  ///
     }
 
     /// This merging param maybe used as part of sorting key
@@ -849,6 +884,21 @@ static StoragePtr create(const StorageFactory::Arguments & args)
             renaming_restrictions,
             need_check_table_structure);
     }
+    else if (args.engine_name.starts_with("TSearchMonitor"))
+    {
+        StorageTSearchMonitorMergeTree::Configuration config;
+        config = StorageTSearchMonitorMergeTree::parseArguments(engine_args, context);
+        return std::make_shared<StorageTSearchMonitorMergeTree>(
+            args.table_id,
+            args.relative_data_path,
+            metadata,
+            args.mode,
+            context,
+            date_column_name,
+            merging_params,
+            config,
+            std::move(storage_settings));
+    }
     else
         return std::make_shared<StorageMergeTree>(
             args.table_id,
@@ -872,6 +922,8 @@ void registerStorageMergeTree(StorageFactory & factory)
         .supports_ttl = true,
         .supports_parallel_insert = true,
     };
+
+    factory.registerStorage("TSearchMonitorMergeTree", create, features);
 
     factory.registerStorage("MergeTree", create, features);
     factory.registerStorage("CollapsingMergeTree", create, features);

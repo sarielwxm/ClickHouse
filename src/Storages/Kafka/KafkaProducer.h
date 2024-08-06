@@ -30,6 +30,8 @@ public:
 
     void produce(const String & message, size_t rows_in_message, const Columns & columns, size_t last_row) override;
 
+    void produce(const String & message, size_t rows_in_message, const Columns & columns, size_t last_row, size_t partition);
+
     void start(const ContextPtr &) override {}
     void finish() override;
 

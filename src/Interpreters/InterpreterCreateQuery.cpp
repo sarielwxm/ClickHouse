@@ -216,7 +216,8 @@ BlockIO InterpreterCreateQuery::createDatabase(ASTCreateQuery & create)
 
     if (create.storage->engine->name == "Atomic"
         || create.storage->engine->name == "Replicated"
-        || create.storage->engine->name == "MaterializedPostgreSQL")
+        || create.storage->engine->name == "MaterializedPostgreSQL"
+        || create.storage->engine->name == "Monitor")
     {
         if (create.attach && create.uuid == UUIDHelpers::Nil)
             throw Exception(ErrorCodes::INCORRECT_QUERY, "UUID must be specified for ATTACH. "
@@ -224,7 +225,10 @@ BlockIO InterpreterCreateQuery::createDatabase(ASTCreateQuery & create)
         else if (create.uuid == UUIDHelpers::Nil)
             create.uuid = UUIDHelpers::generateV4();
 
-        metadata_path = metadata_path / "store" / DatabaseCatalog::getPathForUUID(create.uuid);
+        if (create.storage->engine->name == "Monitor")
+            metadata_path = metadata_path / "metadata" / DatabaseCatalog::getPathForUUID(create.uuid);
+        else
+            metadata_path = metadata_path / "store" / DatabaseCatalog::getPathForUUID(create.uuid);
 
         if (!create.attach && fs::exists(metadata_path))
             throw Exception(ErrorCodes::DATABASE_ALREADY_EXISTS, "Metadata directory {} already exists", metadata_path.string());

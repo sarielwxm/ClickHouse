@@ -2481,7 +2481,16 @@ MergeTreeData::DataPartsVector MergeTreeData::grabOldParts(bool force)
             }
 
             auto part_remove_time = part->remove_time.load(std::memory_order_relaxed);
-            bool reached_removal_time = part_remove_time <= time_now && time_now - part_remove_time >= getSettings()->old_parts_lifetime.totalSeconds();
+            bool reached_removal_time;
+            if (part->storage.getName().starts_with("TSearchMonitor"))
+            {
+                int64_t old_monitor_parts_lifetime_seconds = getContext()->getConfigRef().getInt64("old_monitor_parts_lifetime", 86400);
+                Poco::Timespan old_monitor_parts_lifetime(old_monitor_parts_lifetime_seconds * Poco::Timespan::TimeDiff(Poco::Timespan::SECONDS));
+                Poco::Timespan::TimeDiff total_seconds = old_monitor_parts_lifetime.totalSeconds();
+                reached_removal_time = part_remove_time <= time_now && time_now - part_remove_time >= total_seconds;
+            }
+            else
+                reached_removal_time = part_remove_time <= time_now && time_now - part_remove_time >= getSettings()->old_parts_lifetime.totalSeconds();
             if ((reached_removal_time && !has_skipped_mutation_parent(part))
                 || force
                 || (part->version.creation_csn == Tx::RolledBackCSN && getSettings()->remove_rolled_back_parts_immediately))

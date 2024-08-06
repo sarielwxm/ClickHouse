@@ -9,6 +9,7 @@ void registerDatabaseAtomic(DatabaseFactory & factory);
 void registerDatabaseOrdinary(DatabaseFactory & factory);
 void registerDatabaseDictionary(DatabaseFactory & factory);
 void registerDatabaseMemory(DatabaseFactory & factory);
+void registerDatabaseMonitor(DatabaseFactory & factory);
 void registerDatabaseLazy(DatabaseFactory & factory);
 void registerDatabaseFilesystem(DatabaseFactory & factory);
 void registerDatabaseReplicated(DatabaseFactory & factory);
@@ -43,6 +44,7 @@ void registerDatabases()
     registerDatabaseOrdinary(factory);
     registerDatabaseDictionary(factory);
     registerDatabaseMemory(factory);
+    registerDatabaseMonitor(factory);
     registerDatabaseLazy(factory);
     registerDatabaseFilesystem(factory);
     registerDatabaseReplicated(factory);

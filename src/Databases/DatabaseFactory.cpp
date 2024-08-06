@@ -67,7 +67,7 @@ void validate(const ASTCreateQuery & create_query)
 
     /// Check engine may have arguments
     static const std::unordered_set<std::string_view> engines_with_arguments{"MySQL", "MaterializeMySQL", "MaterializedMySQL",
-        "Lazy", "Replicated", "PostgreSQL", "MaterializedPostgreSQL", "SQLite", "Filesystem", "S3", "HDFS"};
+        "Lazy", "Replicated", "PostgreSQL", "MaterializedPostgreSQL", "SQLite", "Filesystem", "S3", "HDFS", "Monitor"};
 
     const String & engine_name = storage->engine->name;
     bool engine_may_have_arguments = engines_with_arguments.contains(engine_name);

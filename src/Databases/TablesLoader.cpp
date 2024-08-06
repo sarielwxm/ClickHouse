@@ -40,10 +40,15 @@ LoadTaskPtrs TablesLoader::loadTablesAsync(LoadJobSet load_after)
     /// Note that this loading is NOT async because it should be fast and it cannot have any dependencies
     for (auto & database : databases)
     {
+        std::cout << database.first << std::endl;
         if (need_resolve_dependencies && database.second->supportsLoadingInTopologicalOrder())
             databases_to_load.push_back(database.first);
         else
             database.second->loadStoredObjects(global_context, strictness_mode);
+    }
+    for (auto & database_name : databases_to_load)
+    {
+        std::cout << "databases_to_load:" <<database_name << std::endl;
     }
 
     if (databases_to_load.empty())

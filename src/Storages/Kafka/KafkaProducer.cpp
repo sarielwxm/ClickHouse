@@ -84,6 +84,49 @@ void KafkaProducer::produce(const String & message, size_t rows_in_message, cons
     }
 }
 
+void KafkaProducer::produce(const String & message, size_t rows_in_message, const Columns & columns, size_t last_row, size_t partition)
+{
+    ProfileEvents::increment(ProfileEvents::KafkaRowsWritten, rows_in_message);
+    cppkafka::MessageBuilder builder(topic);
+    builder.payload(message);
+    builder.partition(static_cast<int>(partition));
+
+    // Note: if it will be few rows per message - it will take the value from last row of block
+    if (key_column_index)
+    {
+        const auto & key_column = assert_cast<const ColumnString &>(*columns[key_column_index.value()]);
+        const auto key_data = key_column.getDataAt(last_row);
+        builder.key(cppkafka::Buffer(key_data.data, key_data.size));
+    }
+
+    if (timestamp_column_index)
+    {
+        const auto & timestamp_column = assert_cast<const ColumnUInt32 &>(*columns[timestamp_column_index.value()]);
+        const auto timestamp = std::chrono::seconds{timestamp_column.getElement(last_row)};
+        (void)builder.timestamp(timestamp);
+    }
+
+    while (!shutdown_called)
+    {
+        try
+        {
+            producer->produce(builder);
+        }
+        catch (cppkafka::HandleException & e)
+        {
+            if (e.get_error() == RD_KAFKA_RESP_ERR__QUEUE_FULL)
+            {
+                producer->poll(timeout);
+                continue;
+            }
+            ProfileEvents::increment(ProfileEvents::KafkaProducerErrors);
+            throw;
+        }
+        ProfileEvents::increment(ProfileEvents::KafkaMessagesProduced);
+        break;
+    }
+}
+
 void KafkaProducer::finish()
 {
     // For unknown reason we may hit some internal timeout when inserting for the first time.
