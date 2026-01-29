@@ -694,6 +694,14 @@ void DataPartStorageOnDiskBase::remove(
     bool has_delete_prefix = part_dir_without_slash.filename().string().starts_with("delete_tmp_");
     std::optional<CanRemoveDescription> can_remove_description;
     auto disk = volume->getDisk();
+
+    /// Skip rename prefix for disks with zero space (e.g., DiskManifest).
+    /// These disks don't support rename operations, and the prefix is only needed
+    /// to avoid race conditions on writable filesystems.
+    auto total_space = disk->getTotalSpace();
+    if (total_space && *total_space == 0)
+        has_delete_prefix = true;
+
     fs::path to = fs::path(root_path) / part_dir_without_slash;
 
     if (!has_delete_prefix)

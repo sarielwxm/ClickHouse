@@ -47,6 +47,14 @@
 namespace DB
 {
 
+enum class ManifestOpType
+{
+    PreCommit,
+    PreRemove,
+    PreDetach,
+    Commit,
+};
+
 /// Number of streams is not number parts, but number or parts*files, hence 100.
 const size_t DEFAULT_DELAYED_STREAMS_FOR_PARALLEL_WRITE = 100;
 
@@ -880,13 +888,13 @@ public:
 
     /// Returns old inactive parts that can be deleted. At the same time removes them from the list of parts but not from the disk.
     /// If 'force' - don't wait for old_parts_lifetime.
-    DataPartsVector grabOldParts(bool force = false);
+    virtual DataPartsVector grabOldParts(bool force = false);
 
     /// Reverts the changes made by grabOldParts(), parts should be in Deleting state.
     void rollbackDeletingParts(const DataPartsVector & parts);
 
     /// Removes parts from data_parts, they should be in Deleting state
-    void removePartsFinally(const MergeTreeData::DataPartsVector & parts, MergeTreeData::DataPartsVector * removed_parts = nullptr);
+    virtual void removePartsFinally(const MergeTreeData::DataPartsVector & parts, MergeTreeData::DataPartsVector * removed_parts = nullptr);
 
     /// Try to clear parts from filesystem.
     /// If we fail to remove some part and throw_on_error equal to `true` will throw an exception on the first failed part.
@@ -1359,6 +1367,26 @@ public:
     /// Unloads primary keys of outdated parts that are not used by any query.
     /// Returns the number of parts for which index was unloaded.
     size_t unloadPrimaryKeysAndClearCachesOfOutdatedParts();
+
+    virtual DiskPtr getRemoteDisk() const { return nullptr; }
+
+    virtual DiskPtr getManifestDisk() const { return nullptr; }
+    virtual bool isRemotePart(const DiskPtr & /* disk */, const String & /* part_name */) const { return false; }
+
+    virtual void commitToRocks(
+        const DataPartPtr & /* part */,
+        ManifestOpType /* op_type */,
+        const std::optional<UUID> & /* part_uuid */,
+        const std::optional<String> & /* part_name */,
+        bool /* to_remote */,
+        bool /* from_fetch */) const
+    {
+    }
+    virtual void removeFromRocks(const String & /* part_key */) const { }
+
+    virtual void renamePartFromDetachedIfNeeded(MutableDataPartPtr & /* part */) const { }
+
+    virtual void tryMakePartVolatile(MutableDataPartPtr & /* part */, DataPartsLock & /* lock */) const { }
 
 protected:
     friend class IMergeTreeDataPart;
@@ -1838,7 +1866,6 @@ protected:
 
     static MutableDataPartPtr asMutableDeletingPart(const DataPartPtr & part);
 
-private:
     /// Checking that candidate part doesn't break invariants: correct partition
     void checkPartPartition(MutableDataPartPtr & part, const DataPartsAnyLock & lock) const;
     void checkPartDuplicate(MutableDataPartPtr & part, Transaction & transaction, const DataPartsAnyLock & lock) const;
@@ -1918,7 +1945,7 @@ private:
     /// Returns default settings for storage with possible changes from global config.
     virtual std::unique_ptr<MergeTreeSettings> getDefaultSettings() const = 0;
 
-    LoadPartResult loadDataPart(
+    virtual LoadPartResult loadDataPart(
         const MergeTreePartInfo & part_info,
         const String & part_name,
         const DiskPtr & part_disk_ptr,

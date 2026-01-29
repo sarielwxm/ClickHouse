@@ -13,6 +13,7 @@
 #include <Columns/ColumnAggregateFunction.h>
 #include <Common/Config/ConfigHelper.h>
 #include <Common/CurrentMetrics.h>
+#include <Common/FailPoint.h>
 #include <Common/Increment.h>
 #include <Common/ProfileEventsScope.h>
 #include <Common/Stopwatch.h>
@@ -182,6 +183,12 @@ namespace
 namespace DB
 {
 
+namespace FailPoints
+{
+extern const char commit_rocksdb_fail_after_op[];
+extern const char insert_tmp_part_and_commit_rocksdb_fail[];
+extern const char delete_from_rocksdb_fail_after_op[];
+}
 namespace Setting
 {
     extern const SettingsBool allow_drop_detached;
@@ -418,7 +425,12 @@ void MergeTreeData::initializeDirectoriesAndFormatVersion(const std::string & re
     const auto format_version_path = fs::path(relative_data_path) / MergeTreeData::FORMAT_VERSION_FILE_NAME;
     std::optional<UInt32> read_format_version;
 
-    for (const auto & disk : getDisks())
+    auto disks = getDisks();
+
+    if (auto remote_disk = getRemoteDisk())
+        disks.push_back(std::move(remote_disk));
+
+    for (const auto & disk : disks)
     {
         if (disk->isBroken())
             continue;
@@ -427,6 +439,7 @@ void MergeTreeData::initializeDirectoriesAndFormatVersion(const std::string & re
         {
             disk->createDirectories(relative_data_path);
             disk->createDirectories(fs::path(relative_data_path) / DETACHED_DIR_NAME);
+            disk->createDirectories(fs::path(relative_data_path) / fmt::format("{}_trash", MergeTreeData::DETACHED_DIR_NAME));
         }
 
         if (auto buf = disk->readFileIfExists(format_version_path, getReadSettings()))
@@ -2171,7 +2184,19 @@ void MergeTreeData::loadDataParts(bool skip_sanity_checks, std::optional<std::un
     auto metadata_snapshot = getInMemoryMetadataPtr();
     const auto settings = getSettings();
 
-    auto disks = getStoragePolicy()->getDisks();
+    Disks disks;
+
+    if (auto manifest_disk = getManifestDisk())
+    {
+        disks.push_back(std::move(manifest_disk));
+    }
+    else
+    {
+        disks = getStoragePolicy()->getDisks();
+
+        if (auto remote_disk = getRemoteDisk())
+            disks.push_back(std::move(remote_disk));
+    }
 
     if (!getStoragePolicy()->isDefaultPolicy() && !skip_sanity_checks && !(*settings)[MergeTreeSetting::disk].changed)
     {
@@ -2263,18 +2288,33 @@ void MergeTreeData::loadDataParts(bool skip_sanity_checks, std::optional<std::un
         {
             for (auto it = disk_ptr->iterateDirectory(relative_data_path); it->isValid(); it->next())
             {
+                String part_name = it->name();
+                bool remote = isRemotePart(disk_ptr, part_name);
+
+                /// Remote part names have an 'R' suffix, strip it for proper parsing.
+                if (remote)
+                    part_name = part_name.substr(0, part_name.size() - 1);
+
                 /// Skip temporary directories, file 'format_version.txt' and directory 'detached'.
-                if (startsWith(it->name(), "tmp")
-                    || it->name() == MergeTreeData::FORMAT_VERSION_FILE_NAME
-                    || it->name() == DETACHED_DIR_NAME)
+                if (startsWith(part_name, "tmp")
+                    || part_name == MergeTreeData::FORMAT_VERSION_FILE_NAME
+                    || part_name == DETACHED_DIR_NAME)
                     continue;
 
-                if (auto part_info = MergeTreePartInfo::tryParsePartName(it->name(), format_version))
+                if (auto part_info = MergeTreePartInfo::tryParsePartName(part_name, format_version))
                 {
-                    if (expected_parts && !expected_parts->contains(it->name()))
-                        unexpected_disk_parts.emplace_back(*part_info, it->name(), disk_ptr);
+                    /// Invert block range for remote parts to ensure correct handling across different MergeTree variants.
+                    if (remote)
+                    {
+                        auto min_block = part_info->min_block;
+                        part_info->min_block = -part_info->max_block;
+                        part_info->max_block = -min_block;
+                    }
+
+                    if (expected_parts && !expected_parts->contains(part_name))
+                        unexpected_disk_parts.emplace_back(*part_info, part_name, disk_ptr);
                     else
-                        disk_parts.emplace_back(*part_info, it->name(), disk_ptr);
+                        disk_parts.emplace_back(*part_info, part_name, disk_ptr);
                 }
             }
         }, Priority{0});
@@ -2404,8 +2444,44 @@ void MergeTreeData::loadDataParts(bool skip_sanity_checks, std::optional<std::un
 
     bool replicated = dynamic_cast<StorageReplicatedMergeTree *>(this) != nullptr;
     if (!is_static_storage)
-        for (auto & part : broken_parts_to_detach)
-            part->renameToDetached("broken-on-start", /*ignore_error=*/ replicated); /// detached parts must not have '_' in prefixes
+    {
+        if (getManifestDisk())
+        {
+            for (auto & part : broken_parts_to_detach)
+            {
+                if (part->name.empty())
+                    throw Exception(ErrorCodes::LOGICAL_ERROR, "Broken part should not have empty name");
+
+                if (part->uuid == UUIDHelpers::Nil)
+                    throw Exception(ErrorCodes::LOGICAL_ERROR, "Broken part {} should have uuid set", part->name);
+
+                if (part->getState() == DataPartState::Temporary)
+                {
+                    fs::remove_all(part->getDataPartStorage().getFullPath());
+                }
+                else
+                {
+                    if (part->getState() != DataPartState::Active && part->getState() != DataPartState::Outdated)
+                    {
+                        throw Exception(
+                            ErrorCodes::LOGICAL_ERROR,
+                            "Broken part {} should be Active or Outdated, but is {}",
+                            part->name,
+                            magic_enum::enum_name(part->getState()));
+                    }
+
+                    commitToRocks(part, ManifestOpType::PreDetach, std::nullopt, std::nullopt, false, false);
+                    part->renameTo(fs::path(MergeTreeData::DETACHED_DIR_NAME) / part->name, true);
+                }
+                removeFromRocks(fmt::format("{}/{}", part->isStoredOnRemoteDisk() ? "remote" : "local", toString(part->uuid)));
+            }
+        }
+        else
+        {
+            for (auto & part : broken_parts_to_detach)
+                part->renameToDetached("broken-on-start", /*ignore_error=*/ replicated); /// detached parts must not have '_' in prefixes
+        }
+    }
 
     resetSerializationHints(part_lock);
 
@@ -2766,8 +2842,26 @@ try
             ++num_loaded_parts;
             if (res.is_broken)
             {
-                forcefullyRemoveBrokenOutdatedPartFromZooKeeperBeforeDetaching(res.part->name);
-                res.part->renameToDetached("broken-on-start", /*ignore_error=*/ replicated); /// detached parts must not have '_' in prefixes
+                if (getManifestDisk())
+                {
+                    if (res.part->getState() != DataPartState::Temporary && res.part->getState() != DataPartState::Outdated)
+                    {
+                        throw Exception(
+                            ErrorCodes::LOGICAL_ERROR,
+                            "Broken part {} should be Temporary or Outdated, but is {}",
+                            res.part->name,
+                            magic_enum::enum_name(res.part->getState()));
+                    }
+
+                    commitToRocks(res.part, ManifestOpType::PreDetach, std::nullopt, std::nullopt, false, false);
+                    res.part->renameTo(fs::path(MergeTreeData::DETACHED_DIR_NAME) / res.part->name, true);
+                    removeFromRocks(fmt::format("{}/{}", res.part->isStoredOnRemoteDisk() ? "remote" : "local", toString(res.part->uuid)));
+                }
+                else
+                {
+                    forcefullyRemoveBrokenOutdatedPartFromZooKeeperBeforeDetaching(res.part->name);
+                    res.part->renameToDetached("broken-on-start", /*ignore_error=*/ replicated); /// detached parts must not have '_' in prefixes
+                }
             }
             else if (res.part->is_duplicate)
                 res.part->remove();
@@ -3067,8 +3161,12 @@ size_t MergeTreeData::clearOldTemporaryDirectories(const String & root_path, siz
 
     size_t cleared_count = 0;
 
+    auto disks = getDisks();
+    if (auto remote_disk = getRemoteDisk())
+        disks.push_back(std::move(remote_disk));
+
     /// Delete temporary directories older than a the specified age.
-    for (const auto & disk : getDisks())
+    for (const auto & disk : disks)
     {
         if (disk->isBroken())
             continue;
@@ -3324,7 +3422,7 @@ void MergeTreeData::removePartsFinally(const MergeTreeData::DataPartsVector & pa
 
             auto it = data_parts_by_info.find(part->info);
             if (it == data_parts_by_info.end())
-                throw Exception(ErrorCodes::LOGICAL_ERROR, "Deleting data part {} doesn't exist", part->name);
+                continue;
 
             (*it)->assertState({DataPartState::Deleting});
 
@@ -4937,21 +5035,61 @@ void MergeTreeData::checkPartDuplicate(MutableDataPartPtr & part, Transaction & 
     }
 }
 
-void MergeTreeData::preparePartForCommit(MutableDataPartPtr & part, Transaction & out_transaction, DataPartsLock &, bool need_rename, bool rename_in_transaction)
+void MergeTreeData::preparePartForCommit(MutableDataPartPtr & part, Transaction & out_transaction, DataPartsLock & lock, bool need_rename, bool rename_in_transaction)
 {
     part->is_temp = false;
     part->setState(DataPartState::PreActive);
 
-    assert([&]()
-           {
-               String dir_name = fs::path(part->getDataPartStorage().getRelativePath()).filename();
-               bool may_be_cleaned_up = dir_name.starts_with("tmp_") || dir_name.starts_with("tmp-fetch_");
-               return !may_be_cleaned_up || temporary_parts.contains(dir_name);
-           }());
-    assert(!(!need_rename && rename_in_transaction));
+    if (getManifestDisk() && !part->isProjectionPart())
+    {
+        if (!fs::exists(fs::path(part->getDataPartStorage().getFullPath()) / "name.txt"))
+        {
+            WriteSettings write_settings = Context::getGlobalContextInstance()->getWriteSettings();
+            auto out = part->getDataPartStorage().writeFile("name.txt", 4096, write_settings);
+            HashingWriteBuffer out_hashing(*out);
+            DB::writeText(part->name, out_hashing);
+            out_hashing.finalize();
+            out->finalize();
+        }
 
-    if (need_rename && !rename_in_transaction)
-        part->renameTo(part->name, true);
+        renamePartFromDetachedIfNeeded(part);
+
+        commitToRocks(part, ManifestOpType::Commit, std::nullopt, std::nullopt, false, false);
+
+        fiu_do_on(FailPoints::commit_rocksdb_fail_after_op,
+        {
+            commitToRocks(part, ManifestOpType::PreCommit, std::nullopt, std::nullopt, false, false);
+        });
+        fiu_do_on(FailPoints::insert_tmp_part_and_commit_rocksdb_fail,
+        {
+            fs::remove(fs::path(part->getDataPartStorage().getFullPath()) / "columns.txt");
+            fs::remove(fs::path(part->getDataPartStorage().getFullPath()) / "uuid.txt");
+            commitToRocks(part, ManifestOpType::PreCommit, std::nullopt, std::nullopt, false, false);
+        });
+        fiu_do_on(FailPoints::delete_from_rocksdb_fail_after_op,
+        {
+            commitToRocks(part, ManifestOpType::PreRemove, std::nullopt, std::nullopt, false, false);
+        });
+    }
+    else
+    {
+        assert([&]()
+            {
+                String dir_name = fs::path(part->getDataPartStorage().getRelativePath()).filename();
+                bool may_be_cleaned_up = dir_name.starts_with("tmp_") || dir_name.starts_with("tmp-fetch_");
+                return !may_be_cleaned_up || temporary_parts.contains(dir_name);
+            }());
+        assert(!(!need_rename && rename_in_transaction));
+
+        if (need_rename && !rename_in_transaction)
+            part->renameTo(part->name, true);
+    }
+
+    /// In theory, calling this method is not required, because:
+    /// - New parts are always non-volatile;
+    /// - For merged parts, their volatility is already determined by the parts they were merged from.
+    /// However, it is included here for consistency and safety.
+    tryMakePartVolatile(part, lock);
 
     LOG_TEST(log, "preparePartForCommit: inserting {} into data_parts_indexes", part->getNameWithState());
     data_parts_indexes.insert(part);
@@ -8849,7 +8987,10 @@ String MergeTreeData::getFullPathOnDisk(const DiskPtr & disk) const
 
 DiskPtr MergeTreeData::tryGetDiskForDetachedPart(const String & part_name) const
 {
-    const auto disks = getStoragePolicy()->getDisks();
+    auto disks = getStoragePolicy()->getDisks();
+
+    if (auto remote_disk = getRemoteDisk())
+        disks.push_back(std::move(remote_disk));
 
     for (const DiskPtr & disk : disks)
         if (disk->existsDirectory(fs::path(relative_data_path) / DETACHED_DIR_NAME / part_name))

@@ -212,6 +212,26 @@ IMergeTreeDataPart::MinMaxIndex::WrittenFiles IMergeTreeDataPart::MinMaxIndex::s
     return written_files;
 }
 
+void IMergeTreeDataPart::MinMaxIndex::store(const MergeTreeData & data, const String & part_path, WriteBuffer & buf) const
+{
+    if (!initialized)
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Attempt to store uninitialized MinMax index for part {}" , part_path);
+
+    auto metadata_snapshot = data.getInMemoryMetadataPtr();
+    const auto & partition_key = metadata_snapshot->getPartitionKey();
+
+    auto minmax_column_names = MergeTreeData::getMinMaxColumnsNames(partition_key);
+    auto minmax_column_types = MergeTreeData::getMinMaxColumnsTypes(partition_key);
+
+    for (size_t i = 0; i < minmax_column_names.size(); ++i)
+    {
+        auto serialization = minmax_column_types.at(i)->getDefaultSerialization();
+
+        serialization->serializeBinary(hyperrectangle[i].left, buf, FormatSettings{});
+        serialization->serializeBinary(hyperrectangle[i].right, buf, FormatSettings{});
+    }
+}
+
 void IMergeTreeDataPart::MinMaxIndex::update(const Block & block, const Names & column_names)
 {
     if (!initialized)
@@ -768,7 +788,7 @@ void IMergeTreeDataPart::removeIfNeeded()
                                 getDataPartStorage().getPartDirectory(), name);
 
             bool is_moving_part = isMovingPart();
-            if (!startsWith(file_name, "tmp") && !endsWith(file_name, ".tmp_proj") && !is_moving_part)
+            if (!startsWith(file_name, "tmp") && !endsWith(file_name, ".tmp_proj") && !is_moving_part && !storage.getManifestDisk())
             {
                 LOG_ERROR(
                     storage.log,
@@ -2099,7 +2119,7 @@ std::pair<bool, NameSet> IMergeTreeDataPart::canRemovePart() const
     /// NOTE: It's needed for zero-copy replication
     if (force_keep_shared_data)
     {
-        LOG_DEBUG(storage.log, "Blobs for part {} cannot be removed because it's forced to be keeped", name);
+        LOG_TRACE(storage.log, "Blobs for part {} cannot be removed because it's forced to be keeped", name);
         return std::make_pair(false, NameSet{});
     }
 
@@ -2121,6 +2141,20 @@ void IMergeTreeDataPart::initializeIndexGranularityInfo(const MergeTreeSettings 
 void IMergeTreeDataPart::remove()
 {
     chassert(assertHasValidVersionMetadata());
+
+    if (storage.getManifestDisk())
+    {
+        try {
+            storage.commitToRocks(shared_from_this(), ManifestOpType::PreRemove, std::nullopt, std::nullopt, false, false);
+        }
+        catch (const std::bad_weak_ptr & e)
+        {
+            /// In destructor, this may be called when object is being destroyed.
+            /// Skip manifest update in this case.
+            (void)e;
+        }
+    }
+
     part_is_probably_removed_from_disk = true;
 
     auto can_remove_callback = [this] ()
@@ -2157,6 +2191,9 @@ void IMergeTreeDataPart::remove()
 
     bool is_temporary_part = is_temp || state == MergeTreeDataPartState::Temporary;
     getDataPartStorage().remove(std::move(can_remove_callback), checksums, projection_checksums, is_temporary_part, storage.log.load());
+
+    if (storage.getManifestDisk())
+        storage.removeFromRocks(fmt::format("{}/{}", isStoredOnRemoteDisk() ? "remote" : "local", toString(uuid)));
 }
 
 std::optional<String> IMergeTreeDataPart::getRelativePathForPrefix(const String & prefix, bool detached, bool broken) const

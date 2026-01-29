@@ -213,7 +213,9 @@ void StorageMergeTree::startup()
 
     /// Temporary directories contain incomplete results of merges (after forced restart)
     ///  and don't allow to reinitialize them, so delete each of them immediately
-    clearOldTemporaryDirectories(0, {"tmp_", "delete_tmp_", "tmp-fetch_"});
+    /// NOTE: if use manifest, no need to check tmp part by prefix name
+    if (!getManifestDisk())
+        clearOldTemporaryDirectories(0, {"tmp_", "delete_tmp_", "tmp-fetch_"});
 
     /// NOTE background task will also do the above cleanups periodically.
     time_after_previous_cleanup_parts.restart();
@@ -1424,7 +1426,12 @@ MergeMutateSelectedEntryPtr StorageMergeTree::selectPartsToMutate(
     size_t max_ast_elements = getContext()->getSettingsRef()[Setting::max_expanded_ast_elements];
 
     auto future_part = std::make_shared<FutureMergedMutatedPart>();
-    if ((*storage_settings.get())[MergeTreeSetting::assign_part_uuids])
+
+    /// NOTE: We override storage settings.
+    /// Therefore, we must use getSettings() to access the current settings,
+    /// instead of directly using storage_settings.get().
+    /// This ensures that any overridden or dynamically updated settings are correctly applied.
+    if ((*getSettings())[MergeTreeSetting::assign_part_uuids])
         future_part->uuid = UUIDHelpers::generateV4();
 
     CurrentlyMergingPartsTaggerPtr tagger;

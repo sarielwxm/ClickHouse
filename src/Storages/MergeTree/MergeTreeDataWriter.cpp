@@ -627,12 +627,23 @@ MergeTreeTemporaryPartPtr MergeTreeDataWriter::writeTempPartImpl(
     else
         part_name = new_part_info.getPartNameV1();
 
-    std::string temp_prefix = "tmp_insert_";
-    const auto & temp_postfix = data.getPostfixForTempInsertName();
-    if (!temp_postfix.empty())
-        temp_prefix += temp_postfix + "_";
+    std::string part_dir;
+    UUID uuid = UUIDHelpers::generateV4();
 
-    std::string part_dir = temp_prefix + part_name;
+    if (data.getManifestDisk())
+    {
+        part_dir = toString(uuid);
+    }
+    else
+    {
+        std::string temp_prefix = "tmp_insert_";
+        const auto & temp_postfix = data.getPostfixForTempInsertName();
+        if (!temp_postfix.empty())
+            temp_prefix += temp_postfix + "_";
+    
+        part_dir = temp_prefix + part_name;
+    }
+
     temp_part->temporary_directory_lock = data.getTemporaryPartDirectoryHolder(part_dir);
 
     MergeTreeIndices indices;
@@ -782,7 +793,7 @@ MergeTreeTemporaryPartPtr MergeTreeDataWriter::writeTempPartImpl(
     data_part_storage->beginTransaction();
 
     if ((*data.storage_settings.get())[MergeTreeSetting::assign_part_uuids])
-        new_data_part->uuid = UUIDHelpers::generateV4();
+        new_data_part->uuid = uuid;
 
     SerializationInfo::Settings settings
     {
@@ -813,6 +824,9 @@ MergeTreeTemporaryPartPtr MergeTreeDataWriter::writeTempPartImpl(
     /// Here Clickhouse claims that this new part can be deleted in temporary state without unlocking the blobs
     /// The blobs have to be removed along with the part, this temporary part owns them and does not share them yet.
     new_data_part->remove_tmp_policy = IMergeTreeDataPart::BlobsRemovalPolicyForTemporaryParts::REMOVE_BLOBS;
+
+    if (data.getManifestDisk())
+        data.commitToRocks(new_data_part, ManifestOpType::PreCommit, std::nullopt, std::nullopt, false, false);
 
     SyncGuardPtr sync_guard;
 

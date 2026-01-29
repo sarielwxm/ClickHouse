@@ -343,6 +343,12 @@ DetachedPartInfo DetachedPartInfo::parseDetachedPartName(
     part_info.disk = disk;
     part_info.dir_name = dir_name;
 
+    if (dir_name.size() == 36 && dir_name.find('-') != String::npos)
+    {
+        part_info.valid_name = true;
+        return part_info;
+    }
+
     /// First, try to find known prefix and parse dir_name as <prefix>_<part_name>.
     /// Arbitrary strings are not allowed for partition_id, so known_prefix cannot be confused with partition_id.
     for (std::string_view known_prefix : DETACH_REASONS)

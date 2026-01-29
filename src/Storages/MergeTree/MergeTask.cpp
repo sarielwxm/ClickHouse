@@ -437,7 +437,12 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare() const
     }
 
     global_ctx->disk = global_ctx->space_reservation->getDisk();
-    auto local_tmp_part_basename = local_tmp_prefix + global_ctx->future_part->name + local_tmp_suffix;
+    UUID uuid = global_ctx->future_part->uuid;
+    String local_tmp_part_basename;
+    if (global_ctx->data->getManifestDisk() && !global_ctx->parent_part)
+        local_tmp_part_basename = toString(uuid);
+    else
+        local_tmp_part_basename = local_tmp_prefix + global_ctx->future_part->name + local_tmp_suffix;
 
     std::optional<MergeTreeDataPartBuilder> builder;
     if (global_ctx->parent_part)
@@ -461,6 +466,12 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare() const
 
     if (data_part_storage->exists())
         throw Exception(ErrorCodes::DIRECTORY_ALREADY_EXISTS, "Directory {} already exists", data_part_storage->getFullPath());
+
+    if (global_ctx->new_data_part->storage.getManifestDisk())
+    {
+        global_ctx->new_data_part->storage.commitToRocks(
+            global_ctx->new_data_part, ManifestOpType::PreCommit, uuid, global_ctx->new_data_part->name, false, false);
+    }
 
     data_part_storage->beginTransaction();
 

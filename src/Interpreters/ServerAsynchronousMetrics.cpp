@@ -20,6 +20,9 @@
 #if USE_AWS_S3
 #include <IO/S3/Client.h>
 #endif
+#if USE_ROCKSDB
+#include <rocksdb/db.h>
+#endif
 
 #include <Storages/MergeTree/MergeTreeData.h>
 #include <Storages/StorageMergeTree.h>
@@ -368,6 +371,30 @@ void ServerAsynchronousMetrics::updateImpl(TimePoint update_time, TimePoint curr
     }
 
     new_values["ZooKeeperClientLastZXIDSeen"] = { getContext()->getZooKeeperLastZXIDSeen(), "The last ZXID the ZooKeeper client has seen."};
+
+#if USE_ROCKSDB
+    {
+        std::vector<rocksdb::ThreadStatus> thread_list;
+        auto status = rocksdb::Env::Default()->GetThreadList(&thread_list);
+
+        size_t bg_flush_threads = 0;
+        size_t bg_compact_threads = 0;
+
+        if (status.ok())
+        {
+            for (const auto & ts : thread_list)
+            {
+                if (ts.operation_type == rocksdb::ThreadStatus::OP_FLUSH)
+                    ++bg_flush_threads;
+                if (ts.operation_type == rocksdb::ThreadStatus::OP_COMPACTION)
+                    ++bg_compact_threads;
+            }
+        }
+
+        new_values["RocksDBBackgroundFlushThreads"] = { bg_flush_threads, "Number of RocksDB background flush threads." };
+        new_values["RocksDBBackgroundCompactionThreads"] = { bg_compact_threads, "Number of RocksDB background compaction threads." };
+    }
+#endif
 
 #if USE_NURAFT
     {
