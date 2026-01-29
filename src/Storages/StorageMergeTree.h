@@ -32,6 +32,12 @@ using PreparedSetsCachePtr = std::shared_ptr<PreparedSetsCache>;
 class StorageMergeTree : public MergeTreeData
 {
 public:
+    virtual void onNewMergeTask(MergePlainMergeTreeTaskPtr /* task */) { }
+    virtual void onNewMutateTask(MutatePlainMergeTreeTaskPtr /* task */) { }
+    virtual void onNewMergedPart(DataPartsLock /* lock */, const DataPartPtr & /* part */) { }
+    virtual void onNewMutatedPart(DataPartsLock /* lock */, const DataPartPtr & /* part */) { }
+    virtual bool canMerge(const PartProperties & /* left */, const PartProperties & /* right */) const { return true; }
+
     /** Attach the table with the appropriate name, along the appropriate path (with / at the end),
       *  (correctness of names and paths are not checked)
       *  consisting of the specified columns.
@@ -43,6 +49,14 @@ public:
         const String & relative_data_path_,
         const StorageInMemoryMetadata & metadata,
         LoadingStrictnessLevel mode,
+        ContextMutablePtr context_,
+        const String & date_column_name,
+        const MergingParams & merging_params_,
+        std::unique_ptr<MergeTreeSettings> settings_);
+
+    StorageMergeTree(
+        const StorageID & table_id_,
+        const StorageInMemoryMetadata & metadata,
         ContextMutablePtr context_,
         const String & date_column_name,
         const MergingParams & merging_params_,

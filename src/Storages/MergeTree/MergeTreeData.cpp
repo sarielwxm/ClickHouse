@@ -5055,21 +5055,6 @@ void MergeTreeData::preparePartForCommit(MutableDataPartPtr & part, Transaction 
         renamePartFromDetachedIfNeeded(part);
 
         commitToRocks(part, ManifestOpType::Commit, std::nullopt, std::nullopt, false, false);
-
-        fiu_do_on(FailPoints::commit_rocksdb_fail_after_op,
-        {
-            commitToRocks(part, ManifestOpType::PreCommit, std::nullopt, std::nullopt, false, false);
-        });
-        fiu_do_on(FailPoints::insert_tmp_part_and_commit_rocksdb_fail,
-        {
-            fs::remove(fs::path(part->getDataPartStorage().getFullPath()) / "columns.txt");
-            fs::remove(fs::path(part->getDataPartStorage().getFullPath()) / "uuid.txt");
-            commitToRocks(part, ManifestOpType::PreCommit, std::nullopt, std::nullopt, false, false);
-        });
-        fiu_do_on(FailPoints::delete_from_rocksdb_fail_after_op,
-        {
-            commitToRocks(part, ManifestOpType::PreRemove, std::nullopt, std::nullopt, false, false);
-        });
     }
     else
     {

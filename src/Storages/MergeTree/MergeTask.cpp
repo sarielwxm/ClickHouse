@@ -601,6 +601,10 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare() const
     global_ctx->new_data_part->uuid = global_ctx->future_part->uuid;
     global_ctx->new_data_part->partition.assign(global_ctx->future_part->getPartition());
     global_ctx->new_data_part->is_temp = global_ctx->parent_part == nullptr;
+    global_ctx->new_data_part->is_volatile = std::all_of(
+        global_ctx->future_part->parts.begin(),
+        global_ctx->future_part->parts.end(),
+        [](const auto & part) { return part->is_volatile.load(); });
 
     /// In case of replicated merge tree with zero copy replication
     /// Here Clickhouse claims that this new part can be deleted in temporary state without unlocking the blobs

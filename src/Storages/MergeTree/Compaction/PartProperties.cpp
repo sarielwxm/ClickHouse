@@ -71,6 +71,8 @@ PartProperties buildPartProperties(
     time_t current_time)
 {
     return PartProperties{
+        .part_ptr = part,
+        .is_volatile = part->is_volatile,
         .name = part->name,
         .info = part->info,
         .projection_names = getCalculatedProjectionNames(part),

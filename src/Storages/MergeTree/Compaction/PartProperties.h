@@ -22,6 +22,9 @@ using StorageMetadataPtr = std::shared_ptr<const StorageInMemoryMetadata>;
 
 struct PartProperties
 {
+    const MergeTreeDataPartPtr part_ptr = nullptr;
+    const bool is_volatile = false;
+
     const std::string name;
     const MergeTreePartInfo info;
     const std::set<std::string> projection_names = {};

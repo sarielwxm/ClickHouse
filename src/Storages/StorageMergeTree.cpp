@@ -202,6 +202,28 @@ StorageMergeTree::StorageMergeTree(
     prewarmCaches(getActivePartsLoadingThreadPool().get(), getMarkCacheToPrewarm(0), getPrimaryIndexCacheToPrewarm(0));
 }
 
+StorageMergeTree::StorageMergeTree(
+    const StorageID & table_id_,
+    const StorageInMemoryMetadata & metadata_,
+    ContextMutablePtr context_,
+    const String & date_column_name,
+    const MergingParams & merging_params_,
+    std::unique_ptr<MergeTreeSettings> storage_settings_)
+    : MergeTreeData(
+        table_id_,
+        metadata_,
+        context_,
+        date_column_name,
+        merging_params_,
+        std::move(storage_settings_),
+        false,      /// require_part_metadata
+        LoadingStrictnessLevel::ATTACH)
+    , writer(*this)
+    , merger_mutator(*this)
+    , support_transaction(supportTransaction(getDisks(), log.load()))
+{
+}
+
 
 void StorageMergeTree::startup()
 {
@@ -1686,6 +1708,8 @@ bool StorageMergeTree::scheduleDataProcessingJob(BackgroundJobsAssignee & assign
         /// in MergePlainMergeTreeTask. So, this slot will never be freed.
         if (!scheduled && isTTLMergeType(merge_entry->future_part->merge_type))
             getContext()->getMergeList().cancelMergeWithTTL();
+        if (scheduled)
+            onNewMergeTask(task);
         return scheduled;
     }
     if (mutate_entry)
@@ -1697,7 +1721,10 @@ bool StorageMergeTree::scheduleDataProcessingJob(BackgroundJobsAssignee & assign
         /// which is equal or more fresh than commands themselves. In extremely rare case it can happen that we will have alter
         /// in between we took snapshot above and selected commands. That is why we take new snapshot here.
         auto task = std::make_shared<MutatePlainMergeTreeTask>(*this, getInMemoryMetadataPtr(), mutate_entry, shared_lock, common_assignee_trigger);
-        return assignee.scheduleMergeMutateTask(task);
+        bool scheduled = assignee.scheduleMergeMutateTask(task);
+        if (scheduled)
+            onNewMutateTask(task);
+        return scheduled;
     }
     if (has_mutations)
     {

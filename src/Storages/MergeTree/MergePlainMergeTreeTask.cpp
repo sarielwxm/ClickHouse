@@ -149,7 +149,11 @@ void MergePlainMergeTreeTask::finish()
 
     MergeTreeData::Transaction transaction(storage, txn.get());
     storage.merger_mutator.renameMergedTemporaryPart(new_part, future_part->parts, txn, transaction);
-    transaction.commit();
+    {
+        auto lock = storage.lockParts();
+        transaction.commit(lock);
+        storage.onNewMergedPart(std::move(lock), new_part);
+    }
 
     ThreadFuzzer::maybeInjectSleep();
     ThreadFuzzer::maybeInjectMemoryLimitException();

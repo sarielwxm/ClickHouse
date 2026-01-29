@@ -64,6 +64,11 @@ std::expected<void, PreformattedMessage> MergeTreeMergePredicate::canMergeParts(
                     left.name, right.name, max_possible_level));
     }
 
+    {
+        if (!storage.canMerge(left, right))
+            return std::unexpected(PreformattedMessage::create("Parts {} and {} cannot be merged", left.name, right.name));
+    }
+
     return {};
 }
 

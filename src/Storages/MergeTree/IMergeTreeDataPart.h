@@ -362,7 +362,7 @@ public:
         [[nodiscard]] WrittenFiles store(const Names & column_names, const DataTypes & data_types, IDataPartStorage & part_storage, Checksums & checksums, const MergeTreeSettingsPtr & storage_settings) const;
 
         void store(const MergeTreeData & data, const String & part_path, WriteBuffer & buf) const;
-        
+
         void update(const Block & block, const Names & column_names);
         void merge(const MinMaxIndex & other);
         static void appendFiles(const MergeTreeData & data, Strings & files);
@@ -644,6 +644,8 @@ public:
     mutable std::atomic<DataPartRemovalState> removal_state = DataPartRemovalState::NOT_ATTEMPTED;
 
     mutable std::atomic<time_t> last_removal_attempt_time = 0;
+
+    mutable std::atomic<bool> is_volatile = false;
 
     void removeIfNeeded();
 

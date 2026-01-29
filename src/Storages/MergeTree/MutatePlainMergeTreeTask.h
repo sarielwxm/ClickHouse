@@ -86,5 +86,7 @@ private:
     ContextMutablePtr createTaskContext() const;
 };
 
+using MutatePlainMergeTreeTaskPtr = std::shared_ptr<MutatePlainMergeTreeTask>;
+
 
 }
