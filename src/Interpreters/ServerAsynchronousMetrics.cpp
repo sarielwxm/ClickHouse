@@ -372,7 +372,6 @@ void ServerAsynchronousMetrics::updateImpl(TimePoint update_time, TimePoint curr
 
     new_values["ZooKeeperClientLastZXIDSeen"] = { getContext()->getZooKeeperLastZXIDSeen(), "The last ZXID the ZooKeeper client has seen."};
 
-<<<<<<< HEAD
 #if USE_ROCKSDB
     {
         std::vector<rocksdb::ThreadStatus> thread_list;
@@ -396,7 +395,7 @@ void ServerAsynchronousMetrics::updateImpl(TimePoint update_time, TimePoint curr
         new_values["RocksDBBackgroundCompactionThreads"] = { bg_compact_threads, "Number of RocksDB background compaction threads." };
     }
 #endif
-=======
+
     {
         Float64 max_merge_elapsed = 0;
         for (const auto & merge : getContext()->getMergeList().get())
@@ -404,7 +403,6 @@ void ServerAsynchronousMetrics::updateImpl(TimePoint update_time, TimePoint curr
         new_values["LongestRunningMerge"]
             = {max_merge_elapsed, "Elapsed time in seconds of the longest currently running background merge."};
     }
->>>>>>> upstream/master
 
 #if USE_NURAFT
     {
